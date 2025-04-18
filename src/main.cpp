@@ -36,7 +36,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     payloadStr += (char)payload[i];
   }
 
-  if (strcmp(topic, "startMeasure") == 0) {
+  if (strcmp(topic, topic_start_measure) == 0) {
     isOccupied = true;
     mqttClient.publish(topic_esp_occupied, "1", true);
     
@@ -44,7 +44,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     occupancyTimeout.once(5, resetOccupancy);
   }
 
-  if (strcmp(topic, "measureTime") == 0 && isOccupied) {
+  if (strcmp(topic, topic_measure_time) == 0 && isOccupied) {
     // Cancela o timeout pois recebemos o measureTime
     occupancyTimeout.detach();
     
@@ -81,8 +81,8 @@ void reconnect() {
     
     if (mqttClient.connect(clientId.c_str(), mqtt_username, mqtt_password)) {
       Serial.println("Connected to MQTT Broker.");
-      mqttClient.subscribe("startMeasure", 1); //QOS = 1
-      mqttClient.subscribe("measureTime", 1); //QOS = 1
+      mqttClient.subscribe(topic_start_measure, 1); //QOS = 1
+      mqttClient.subscribe(topic_measure_time, 1); //QOS = 1
     } else {
       Serial.print("Failed, rc=");
       Serial.print(mqttClient.state());
