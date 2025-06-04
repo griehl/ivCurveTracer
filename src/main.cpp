@@ -22,12 +22,47 @@ const char* mqtt_password = MQTT_PASSWORD;
 const char* topic_esp_occupied = TOPIC_ESP_OCCUPIED;
 const char* topic_current_value = TOPIC_CURRENT_VALUE;
 const char* topic_tension_value = TOPIC_TENSION_VALUE;
+const char* topic_power_value = TOPIC_POWER_VALUE;
 const char* topic_start_measure = TOPIC_START_MEASURE;
-const char* topic_measure_time = TOPIC_MEASURE_TIME;
+const char* topic_measure_period = TOPIC_MEASURE_PERIOD;
+const int wifi_connected_led = 2;
 
 // Criando instâncias do cliente Wi-Fi e do cliente MQTT
 WiFiClientSecure wifiClient;
 PubSubClient mqttClient(wifiClient);
+
+void resetOccupancy() {
+  isOccupied = false;
+  mqttClient.publish(topic_esp_occupied, "0", false);
+}
+
+void generateAndPublishIVCurve(int seconds) {
+  const float maxCurrent = 3.0;
+  const float maxVoltage = 24.0;
+  const int numPoints = seconds * 3;
+  const float kneeVoltage = 18.0;
+
+  for (int i = 0; i < numPoints; i++) {
+    float voltage = (maxVoltage * i) / (numPoints - 1);
+    float current;
+    
+    if (voltage < kneeVoltage) {
+      current = maxCurrent - (maxCurrent * 0.01 * (voltage / kneeVoltage));
+    } else {
+      float fallRatio = (voltage - kneeVoltage) / (maxVoltage - kneeVoltage);
+      current = maxCurrent * (1 - fallRatio * 1.2);
+      current = (current > 0.0) ? current : 0.0;  // Versão alternativa ao max()
+    }
+
+    float power = voltage * current;
+
+    mqttClient.publish(topic_tension_value, String(voltage, 2).c_str(), false);
+    mqttClient.publish(topic_current_value, String(current, 3).c_str(), false);
+    mqttClient.publish(topic_power_value, String(power, 2).c_str(), false);
+
+    delay(100);
+  }
+}
 
 void callback(char* topic, byte* payload, unsigned int length) {
   // Converter payload para String
@@ -36,40 +71,29 @@ void callback(char* topic, byte* payload, unsigned int length) {
     payloadStr += (char)payload[i];
   }
 
+  Serial.println(payloadStr);
+
   if (strcmp(topic, topic_start_measure) == 0) {
     isOccupied = true;
-    mqttClient.publish(topic_esp_occupied, "1", true);
-    
+    mqttClient.publish(topic_esp_occupied, "1", false);
+    Serial.println("Medição solicitada");
     // Configura timeout de 5 segundos
     occupancyTimeout.once(5, resetOccupancy);
   }
 
-  if (strcmp(topic, topic_measure_time) == 0 && isOccupied) {
+  if (strcmp(topic, topic_measure_period) == 0 && isOccupied) {
     // Cancela o timeout pois recebemos o measureTime
     occupancyTimeout.detach();
-    
+    Serial.println("Período de medição recebido: " + payloadStr);
     // Converte payload para inteiro
     int seconds = payloadStr.toInt();
     seconds = min(seconds, 60); // Limita a 60 segundos por segurança
 
-    for (int i = 0; i < seconds; i++) {
-      // Aqui você colocaria os valores reais das medições
-      mqttClient.publish(topic_current_value, "VALOR_CORRENTE", true);
-      mqttClient.publish(topic_tension_value, "VALOR_TENSAO", true);
-      
-      if (i < seconds - 1) { // Não espera depois do último envio
-        delay(1000);
-      }
-    }
-    
+    generateAndPublishIVCurve(seconds);
+
     // Libera o ESP32 após completar as medições
     resetOccupancy();
   }
-}
-
-void resetOccupancy() {
-  isOccupied = false;
-  mqttClient.publish(topic_esp_occupied, "0", true);
 }
 
 void reconnect() {
@@ -82,7 +106,7 @@ void reconnect() {
     if (mqttClient.connect(clientId.c_str(), mqtt_username, mqtt_password)) {
       Serial.println("Connected to MQTT Broker.");
       mqttClient.subscribe(topic_start_measure, 1); //QOS = 1
-      mqttClient.subscribe(topic_measure_time, 1); //QOS = 1
+      mqttClient.subscribe(topic_measure_period, 1); //QOS = 1
     } else {
       Serial.print("Failed, rc=");
       Serial.print(mqttClient.state());
@@ -94,6 +118,9 @@ void reconnect() {
 
 void setup() {
   Serial.begin(115200);
+
+  pinMode(wifi_connected_led, OUTPUT);
+  digitalWrite(wifi_connected_led, LOW);
   
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
@@ -102,6 +129,7 @@ void setup() {
   }
   Serial.println("");
   Serial.println("Connected to Wi-Fi");
+  digitalWrite(wifi_connected_led, HIGH);
 
   // Inicializa o WifiClientSecure
   wifiClient.setInsecure(); // Use somente para testes, permite conectar sem um certificado raiz
